@@ -12,7 +12,7 @@ class BaseChunker:
 
     def _chunk_text_by_pattern(
             self, text: str, pattern: str, file_path: str
-        ) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         chunks = []
         matches = list(re.finditer(pattern, text))
 
@@ -48,7 +48,7 @@ class BaseChunker:
 
             if i < len(matches):
                 start_idx = matches[i].end()
-        
+
         return chunks
 
 
@@ -68,7 +68,7 @@ class Indexer:
     def __init__(
             self, raw_dir: str, processed_dir: str,
             max_chunk_size: int = 2000
-        ):
+    ):
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path("data/processed")
         self.max_chunk_size = max_chunk_size
@@ -88,7 +88,7 @@ class Indexer:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
-            except Exception as e:
+            except Exception:
                 continue
 
             relative_path = str(file_path)

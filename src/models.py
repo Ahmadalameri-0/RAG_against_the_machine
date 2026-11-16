@@ -1,12 +1,22 @@
 import uuid
 from typing import List, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MinimalSource(BaseModel):
+    """A source location inside the indexed corpus"""
     file_path: str
     first_character_index: int
     last_character_index: int
+
+    @model_validator(mode='after')
+    def _check_range(self) -> "MinimalSource":
+        """Ensure a valid range of at most 2000 characters"""
+        if self.last_character_index < self.first_character_index:
+            raise ValueError("last < first")
+        if self.last_character_index - self.first_character_index > 2000:
+            raise ValueError("source longer than 2000 chars")
+        return self
 
 
 class UnansweredQuestion(BaseModel):
