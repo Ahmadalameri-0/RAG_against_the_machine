@@ -7,11 +7,14 @@ requires-python = ">=3.14"
 
 
 dependencies = [
+    "accelerate>=1.16.0",
     "fire>=0.7.1",
     "flake8>=7.5.0",
     "mypy>=2.4.1",
     "pydantic>=2.14.3",
+    "torch>=2.15.0",
     "tqdm>=4.70.1",
+    "transformers>=5.23.0",
 ]
 
 
