@@ -1,111 +1,168 @@
+import json
 import os
 import re
-import json
-from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Tuple
 from tqdm import tqdm
-
-
-class BaseChunker:
-    def __init__(self, max_chunk_size: int = 2000):
-        self.max_chunk_size = max_chunk_size
-
-    def _chunk_text_by_pattern(
-            self, text: str, pattern: str, file_path: str
-    ) -> List[Dict[str, Any]]:
-        chunks = []
-        matches = list(re.finditer(pattern, text))
-
-        start_idx = 0
-        for i in range(len(matches) + 1):
-            end_idx = matches[i].start() if i < len(matches) else len(text)
-            raw_chunk = text[start_idx:end_idx]
-            clean_chunk = raw_chunk.strip()
-
-            if not clean_chunk:
-                if i < len(matches):
-                    start_idx = matches[i].end()
-                continue
-
-            offset = len(raw_chunk) - len(raw_chunk.lstrip())
-            current_start = start_idx + offset
-
-            while len(clean_chunk) > self.max_chunk_size:
-                chunks.append({
-                    "file_path": file_path,
-                    "first_character_index": current_start,
-                    "last_character_index": current_start + self.max_chunk_size
-                })
-                current_start += self.max_chunk_size
-                clean_chunk = clean_chunk[self.max_chunk_size:]
-
-            if clean_chunk:
-                chunks.append({
-                    "file_path": file_path,
-                    "first_character_index": current_start,
-                    "last_character_index": current_start + len(clean_chunk)
-                })
-
-            if i < len(matches):
-                start_idx = matches[i].end()
-
-        return chunks
-
-
-class MarkdownChunker(BaseChunker):
-    def chunk(self, text: str, file_path: str) -> List[Dict[str, Any]]:
-        pattern = r'\n\n+|\n(?=# )'
-        return self._chunk_text_by_pattern(text, pattern, file_path)
-
-
-class PythonChunker(BaseChunker):
-    def chunk(self, text: str, file_path: str) -> List[Dict[str, Any]]:
-        pattern = r'\n(?=def | \s*class )'
-        return self._chunk_text_by_pattern(text, pattern, file_path)
+from collections import Counter
+from .CLI import TQDM_FMT
 
 
 class Indexer:
+    """Ingest raw files, chunk them, and build a BM25 inverted index."""
+
     def __init__(
-            self, raw_dir: str, processed_dir: str,
-            max_chunk_size: int = 2000
-    ):
-        self.raw_dir = Path(raw_dir)
-        self.processed_dir = Path("data/processed")
-        self.max_chunk_size = max_chunk_size
-        self.md_chunker = MarkdownChunker(max_chunk_size)
-        self.py_chunker = PythonChunker(max_chunk_size)
+        self,
+        raw_dir: str = "data/raw",
+        processed_dir: str = "data/processed",
+    ) -> None:
+        """Initialize indexer with configurable input/output directories."""
+        self.raw_dir: str = raw_dir
+        self.processed_dir: str = processed_dir
 
-    def build_index(self) -> None:
-        all_chunks = []
-        files_to_process = []
+    @staticmethod
+    def tokenize(text: str) -> List[str]:
+        """Tokenize text while preserving code identifiers and sub-words."""
+        tokens: List[str] = []
+        for raw in re.findall(r"[A-Za-z0-9_]+", text):
+            lower = raw.lower()
+            tokens.append(lower)
+            parts = re.sub(r"([a-z])([A-Z])", r"\1_\2", raw).split("_")
+            if len(parts) > 1:
+                for part in parts:
+                    p_low = part.lower()
+                    if len(p_low) > 1 and p_low != lower:
+                        tokens.append(p_low)
+        return tokens
 
-        for root, _, files in os.walk(self.raw_dir):
-            for file in files:
-                if file.endswith(('.py', '.md')):
-                    files_to_process.append(Path(root) / file)
+    def _fit_spans(
+        self,
+        content: str,
+        raw_spans: List[Tuple[int, int]],
+        max_chunk_size: int,
+    ) -> List[Tuple[int, int]]:
+        """Pack or split character spans so every chunk <= max_chunk_size."""
+        fitted: List[Tuple[int, int]] = []
+        cur_start: int = -1
+        cur_end: int = -1
 
-        for file_path in tqdm(files_to_process, desc="Chunking Files"):
+        for start, end in raw_spans:
+            if not content[start:end].strip():
+                continue
+            if end - start > max_chunk_size:
+                if cur_start != -1:
+                    fitted.append((cur_start, cur_end))
+                    cur_start, cur_end = -1, -1
+                pos = start
+                while pos < end:
+                    nxt = min(pos + max_chunk_size, end)
+                    if content[pos:nxt].strip():
+                        fitted.append((pos, nxt))
+                    pos = nxt
+            elif cur_start == -1:
+                cur_start, cur_end = start, end
+            elif end - cur_start <= max_chunk_size:
+                cur_end = end
+            else:
+                fitted.append((cur_start, cur_end))
+                cur_start, cur_end = start, end
+
+        if cur_start != -1:
+            fitted.append((cur_start, cur_end))
+        return fitted
+
+    def _chunk_by_pattern(
+        self, content: str, pattern: str, max_chunk_size: int
+    ) -> List[Tuple[int, int]]:
+        """Split content by regex boundaries keeping exact char offsets."""
+        starts = [0] + [m.start() + 1 for m in re.finditer(pattern, content)]
+        spans = [
+            (starts[i], starts[i + 1]) for i in range(len(starts) - 1)
+        ] + [(starts[-1], len(content))]
+        return self._fit_spans(content, spans, max_chunk_size)
+
+    def _chunk_python(
+        self, content: str, max_chunk_size: int
+    ) -> List[Tuple[int, int]]:
+        """Chunk Python files along class, def, and async def boundaries."""
+        pattern = r"\n(?=\s*(?:async\s+def |def |class ))"
+        return self._chunk_by_pattern(content, pattern, max_chunk_size)
+
+    def _chunk_markdown(
+        self, content: str, max_chunk_size: int
+    ) -> List[Tuple[int, int]]:
+        """Chunk Markdown/text files along headings and blank lines."""
+        pattern = r"\n(?=#{1,6}\s)|\n\n"
+        return self._chunk_by_pattern(content, pattern, max_chunk_size)
+
+    def _collect_files(self) -> List[str]:
+        """Collect supported source and documentation files."""
+        exts = (".py", ".md", ".txt", ".rst")
+        skip_dirs = {".git", "__pycache__", ".venv", "node_modules"}
+        files: List[str] = []
+        for root, dirs, filenames in os.walk(self.raw_dir):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for name in filenames:
+                if name.endswith(exts):
+                    full_path = os.path.join(root, name).replace("\\", "/")
+                    files.append(full_path)
+        files.sort()
+        return files
+
+    def index(self, max_chunk_size: int = 2000) -> None:
+        """Chunk corpus and persist compact inverted index to disk."""
+        files = self._collect_files()
+        chunks: List[Dict[str, Any]] = []
+        inverted_index: Dict[str, List[List[int]]] = {}
+        total_len: int = 0
+
+        for file_path in tqdm(files, desc="Indexing", bar_format=TQDM_FMT):
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-            except Exception:
+                with open(
+                    file_path, "r", encoding="utf-8", errors="ignore"
+                ) as f:
+                    content = f.read()
+            except OSError:
                 continue
 
-            relative_path = str(file_path)
-            if file_path.suffix == '.md':
-                chunks = self.md_chunker.chunk(text, relative_path)
-            elif file_path.suffix == '.py':
-                chunks = self.py_chunker.chunk(text, relative_path)
+            if file_path.endswith(".py"):
+                spans = self._chunk_python(content, max_chunk_size)
+            else:
+                spans = self._chunk_markdown(content, max_chunk_size)
 
-            all_chunks.extend(chunks)
+            path_tokens = self.tokenize(file_path)
+            for start, end in spans:
+                doc_tokens = path_tokens + self.tokenize(content[start:end])
+                if not doc_tokens:
+                    continue
+                doc_id = len(chunks)
+                doc_len = len(doc_tokens)
+                total_len += doc_len
+                chunks.append(
+                    {
+                        "file_path": file_path,
+                        "first_character_index": start,
+                        "last_character_index": end,
+                        "length": doc_len,
+                    }
+                )
+                for term, tf in Counter(doc_tokens).items():
+                    if term not in inverted_index:
+                        inverted_index[term] = []
+                    inverted_index[term].append([doc_id, tf])
 
-        self.processed_dir.mkdir(parents=True, exist_ok=True)
-        index_file = self.processed_dir / "index.json"
-
-        with open(index_file, 'w', encoding='utf-8') as f:
-            json.dump(all_chunks, f, ensure_ascii=False, indent=4)
-
-        print(
-            f"\nIngestion complete! Indexed {len(all_chunks)} "
-            f"chunks under {self.processed_dir}/"
-        )
+        os.makedirs(self.processed_dir, exist_ok=True)
+        index_path = os.path.join(self.processed_dir, "index.json")
+        avg_len = (total_len / len(chunks)) if chunks else 0.0
+        payload: Dict[str, Any] = {
+            "num_docs": len(chunks),
+            "avg_doc_len": avg_len,
+            "chunks": chunks,
+            "inverted_index": inverted_index,
+        }
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write("{\n")
+            for pos, (key, value) in enumerate(payload.items()):
+                dumped = json.dumps(value, separators=(",", ":"))
+                comma = "," if pos < len(payload) - 1 else ""
+                f.write(f'  "{key}": {dumped}{comma}\n')
+            f.write("}\n")

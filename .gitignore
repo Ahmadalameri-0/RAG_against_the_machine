@@ -6,3 +6,5 @@ model_cache
 .venv
 *.vscode/
 *test/
+flags*
+data/

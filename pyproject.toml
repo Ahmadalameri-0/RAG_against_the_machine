@@ -1,26 +1,22 @@
 [project]
 name = "rag-against"
 version = "0.1.0"
-description = ""
 readme = "README.md"
-requires-python = ">=3.14"
-
+requires-python = ">=3.11"
 
 dependencies = [
-    "accelerate>=1.16.0",
     "fire>=0.7.1",
-    "flake8>=7.5.0",
-    "mypy>=2.4.1",
     "pydantic>=2.14.3",
     "torch>=2.15.0",
     "tqdm>=4.70.1",
     "transformers>=5.23.0",
 ]
 
-
-[project.scripts]
-rag-against = "rag_against:main"
-
+[dependency-groups]
+dev = [
+    "flake8>=7.5.0",
+    "mypy>=2.4.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
