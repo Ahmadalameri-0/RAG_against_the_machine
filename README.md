@@ -4,8 +4,7 @@
 ## System Architecture
 ```mermaid
 graph TD
-%%{init:
-{'flowchart': {'nodeSpacing': 15, 'rankSpacing': 15}, 'themeVariables': {'fontSize': '8px'}}}%%
+%%{init:{'flowchart': {'nodeSpacing': 15, 'rankSpacing': 15}, 'themeVariables': {'fontSize': '8px'}}}%%
     %% 1. (Indexing Phase)
     subgraph Indexing [1. Indexing Phase]
         A[📄 Raw Files / Corpus] -->|Parse & Split| B[✂️ Indexer / Chunker]
@@ -47,14 +46,14 @@ Each stage exchanges Pydantic-validated schemas (`src/models.py`): the **Indexer
 **RAG (Retrieval-Augmented Generation) lets a language model answer from an external source instead of relying only on its training data. This project indexes the vLLM repository, retrieves the most relevant snippets for a question (BM25), and feeds them to Qwen3-0.6B to generate a grounded answer.**
 
 **How Does This RAG Pipeline Work?**
-1. **Ingestion:** Read `.py`, `.md`, `.txt`, and `.rst` files from `data/raw/`.
+1. **Ingestion:** Read `.py`, `.md`, `.txt`, files from `data/raw/`.
 2. **Chunking:** Split files along code/heading boundaries ($\le 2000$ chars) while saving exact character offsets.
 3. **Indexing:** Tokenize chunks and build a **BM25 inverted index** saved to `data/processed/index.json`.
 4. **Retrieval:** Rank matching chunks with **BM25** in milliseconds to return the top-$k$ source spans.
 5. **Generation:** Read the retrieved snippets from disk and pass them with the query to **`Qwen/Qwen3-0.6B`** to generate a grounded JSON answer.
 ---
 ## Instructions
-
+---
 ### Prerequisites & Setup
 Dependencies and caches are managed with `uv` and routed to `/goinfre` via the `Makefile` to respect 42 disk quotas.
 

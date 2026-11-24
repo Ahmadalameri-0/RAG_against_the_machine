@@ -1,8 +1,9 @@
 import json
 import os
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 from tqdm import tqdm
+from .chunker import Chunker
 from collections import Counter
 from .CLI import TQDM_FMT
 
@@ -18,12 +19,13 @@ class Indexer:
         """Initialize indexer with configurable input/output directories."""
         self.raw_dir: str = raw_dir
         self.processed_dir: str = processed_dir
+        self.chunker: Chunker = Chunker()
 
     @staticmethod
     def tokenize(text: str) -> List[str]:
         """Tokenize text while preserving code identifiers and sub-words."""
         tokens: List[str] = []
-        for raw in re.findall(r"[A-Za-z0-9_]+", text):
+        for raw in re.findall(r"[A-Za-z0-9]+", text):
             lower = raw.lower()
             tokens.append(lower)
             parts = re.sub(r"([a-z])([A-Z])", r"\1_\2", raw).split("_")
@@ -34,69 +36,9 @@ class Indexer:
                         tokens.append(p_low)
         return tokens
 
-    def _fit_spans(
-        self,
-        content: str,
-        raw_spans: List[Tuple[int, int]],
-        max_chunk_size: int,
-    ) -> List[Tuple[int, int]]:
-        """Pack or split character spans so every chunk <= max_chunk_size."""
-        fitted: List[Tuple[int, int]] = []
-        cur_start: int = -1
-        cur_end: int = -1
-
-        for start, end in raw_spans:
-            if not content[start:end].strip():
-                continue
-            if end - start > max_chunk_size:
-                if cur_start != -1:
-                    fitted.append((cur_start, cur_end))
-                    cur_start, cur_end = -1, -1
-                pos = start
-                while pos < end:
-                    nxt = min(pos + max_chunk_size, end)
-                    if content[pos:nxt].strip():
-                        fitted.append((pos, nxt))
-                    pos = nxt
-            elif cur_start == -1:
-                cur_start, cur_end = start, end
-            elif end - cur_start <= max_chunk_size:
-                cur_end = end
-            else:
-                fitted.append((cur_start, cur_end))
-                cur_start, cur_end = start, end
-
-        if cur_start != -1:
-            fitted.append((cur_start, cur_end))
-        return fitted
-
-    def _chunk_by_pattern(
-        self, content: str, pattern: str, max_chunk_size: int
-    ) -> List[Tuple[int, int]]:
-        """Split content by regex boundaries keeping exact char offsets."""
-        starts = [0] + [m.start() + 1 for m in re.finditer(pattern, content)]
-        spans = [
-            (starts[i], starts[i + 1]) for i in range(len(starts) - 1)
-        ] + [(starts[-1], len(content))]
-        return self._fit_spans(content, spans, max_chunk_size)
-
-    def _chunk_python(
-        self, content: str, max_chunk_size: int
-    ) -> List[Tuple[int, int]]:
-        """Chunk Python files along class, def, and async def boundaries."""
-        pattern = r"\n(?=\s*(?:async\s+def |def |class ))"
-        return self._chunk_by_pattern(content, pattern, max_chunk_size)
-
-    def _chunk_markdown(
-        self, content: str, max_chunk_size: int
-    ) -> List[Tuple[int, int]]:
-        """Chunk Markdown/text files along headings and blank lines."""
-        pattern = r"\n(?=#{1,6}\s)|\n\n"
-        return self._chunk_by_pattern(content, pattern, max_chunk_size)
-
     def _collect_files(self) -> List[str]:
-        """Collect supported source and documentation files."""
-        exts = (".py", ".md", ".txt", ".rst")
+        """Collect supported source and documentation files"""
+        exts = (".py", ".md", ".txt")
         skip_dirs = {".git", "__pycache__", ".venv", "node_modules"}
         files: List[str] = []
         for root, dirs, filenames in os.walk(self.raw_dir):
@@ -109,7 +51,7 @@ class Indexer:
         return files
 
     def index(self, max_chunk_size: int = 2000) -> None:
-        """Chunk corpus and persist compact inverted index to disk."""
+        """Chunk corpus and persist compact inverted index to disk"""
         files = self._collect_files()
         chunks: List[Dict[str, Any]] = []
         inverted_index: Dict[str, List[List[int]]] = {}
@@ -125,9 +67,9 @@ class Indexer:
                 continue
 
             if file_path.endswith(".py"):
-                spans = self._chunk_python(content, max_chunk_size)
+                spans = self.chunker.chunk_python(content, max_chunk_size)
             else:
-                spans = self._chunk_markdown(content, max_chunk_size)
+                spans = self.chunker.chunk_markdown(content, max_chunk_size)
 
             path_tokens = self.tokenize(file_path)
             for start, end in spans:
@@ -142,7 +84,7 @@ class Indexer:
                         "file_path": file_path,
                         "first_character_index": start,
                         "last_character_index": end,
-                        "length": doc_len,
+                        "length": doc_len
                     }
                 )
                 for term, tf in Counter(doc_tokens).items():
@@ -153,16 +95,21 @@ class Indexer:
         os.makedirs(self.processed_dir, exist_ok=True)
         index_path = os.path.join(self.processed_dir, "index.json")
         avg_len = (total_len / len(chunks)) if chunks else 0.0
-        payload: Dict[str, Any] = {
-            "num_docs": len(chunks),
-            "avg_doc_len": avg_len,
-            "chunks": chunks,
-            "inverted_index": inverted_index,
-        }
         with open(index_path, "w", encoding="utf-8") as f:
             f.write("{\n")
-            for pos, (key, value) in enumerate(payload.items()):
-                dumped = json.dumps(value, separators=(",", ":"))
-                comma = "," if pos < len(payload) - 1 else ""
-                f.write(f'  "{key}": {dumped}{comma}\n')
-            f.write("}\n")
+            f.write(f'  "num_docs": {len(chunks)},\n')
+            f.write(f'  "avg_doc_len": {avg_len},\n')
+            f.write('  "chunks": [\n')
+            for i, c in enumerate(chunks):
+                comma = "," if i < len(chunks) - 1 else ""
+                line = json.dumps(c, separators=(",", ":"))
+                f.write(f"    {line}{comma}\n")
+            f.write("  ],\n")
+            f.write('  "inverted_index": {\n')
+            items = list(inverted_index.items())
+            for i, (term, postings) in enumerate(items):
+                comma = "," if i < len(items) - 1 else ""
+                k = json.dumps(term)
+                v = json.dumps(postings, separators=(",", ":"))
+                f.write(f"    {k}: {v}{comma}\n")
+            f.write("  }\n}\n")

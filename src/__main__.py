@@ -90,7 +90,7 @@ class RAGCLI:
         raw_dir: str = "data/raw",
         processed_dir: str = "data/processed",
     ) -> None:
-        """Ingest raw_dir and bCLIld the index under processed_dir."""
+        """Ingest raw_dir and build the index under processed_dir."""
         if (
             isinstance(max_chunk_size, bool)
             or not isinstance(max_chunk_size, int)
