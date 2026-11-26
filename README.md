@@ -21,14 +21,14 @@ Instead of relying on high-level frameworks (like LangChain) or heavy vector dat
 
 ## Performance Benchmarks
 
-Evaluation uses **Recall@k**—measuring the fraction of queries where the exact reference `file_path` is retrieved within the top-$k$ results with a character-span Intersection over Union ($IoU > 0.05$).
+Evaluation uses **Recall@k**—measuring the fraction of queries where the exact reference `file_path` is retrieved within the top-*k* results with a character-span Intersection over Union (`IoU > 0.05`).
 
 | Metric | Target | Measured |
 | :--- | :--- | :--- |
-| **Docs Recall@5** | $\ge 80\%$ | **`83.0%`** |
-| **Code Recall@5** | $\ge 50\%$ | **`77.8%`** |
-| **Indexing Time** | $\le 5$ min | **`4.41s`** (13,973 chunks) |
-| **Retrieval Throughput** | $\le 90$s / 200 queries | **`1.68s`** / 199 queries |
+| **Docs Recall@5** | ≥ 80% | **`83.0%`** |
+| **Code Recall@5** | ≥ 50% | **`77.8%`** |
+| **Indexing Time** | ≤ 5 min | **`4.41s`** (13,973 chunks) |
+| **Retrieval Throughput** | ≤ 90s / 200 queries | **`1.68s`** / 199 queries |
 
 ---
 ## System Architecture
@@ -43,7 +43,7 @@ graph TD
 
     subgraph Retrieval [2. Retrieval Phase]
         Q[👤 User Query] -->|Search| D{🔍 Lexical Retriever <br/> BM25}
-        C -.->|O&#40;1&#41; Term Lookup| D
+        C -.->|"O(1) Term Lookup"| D
         D -->|Top-K Spans| E[📑 Ranked Source Coordinates]
     end
 
@@ -62,7 +62,6 @@ graph TD
     style F fill:#f3e5f5,stroke:#7b1fa2,color:#000
     style G fill:#ffebee,stroke:#d32f2f,color:#000
 ```
-
 
 Each stage communicates through strict Pydantic-validated schemas (`src/models.py`):
 1. **Ingestion:** Walks `data/raw/` to collect `.py`, `.md`, and `.txt` files deterministically.
